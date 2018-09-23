@@ -1,55 +1,58 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/xml"
+	"github.com/mongodb/mongo-go-driver/bson"
+	"github.com/mongodb/mongo-go-driver/mongo"
 	"os"
 	"path/filepath"
 )
 
 type Bookshelf struct {
-	XMLName xml.Name `xml:"bookshelf"`
-	User User `xml:"user"`
-	Title string `xml:"title"`
-	Intro string `xml:"intro"`
-	Books []Book `xml:"books>book"`
+	XMLName xml.Name `xml:"bookshelf" bson:"-"`
+	User    User     `xml:"user"`
+	Title   string   `xml:"title"`
+	Intro   string   `xml:"intro"`
+	Books   []Book   `xml:"books>book"`
 }
 
 type User struct {
-	Id string `xml:"-"`
-	Name string `xml:"email"`
-	Email string `xml:"name"`
+	Id    string `xml:"-" json:"-"`
+	Name  string `xml:"name"`
+	Email string `xml:"email"`
 }
 
 type Book struct {
-	Id int64 `xml:"-"`
-	Name string `xml:"name"`
-	Authors []Author `xml:"authors>author"`
-	Publish Publish `xml:"publish"`
-	Url string `xml:"url"`
-	Cover string `xml:"cover"`
-	MyRating int `xml:"my>rating"`
-	MyReview string `xml:"my>review"`
+	Id       int64    `xml:"-" json:"-" bson:"-"`
+	Name     string   `xml:"name"`
+	Authors  []Author `xml:"authors>author"`
+	Publish  Publish  `xml:"publish"`
+	Url      string   `xml:"url"`
+	Cover    string   `xml:"cover"`
+	MyRating int      `xml:"my>rating"`
+	MyReview string   `xml:"my>review"`
 }
 
 type Publish struct {
 	Publisher Publisher `xml:"publisher"`
-	Year int `xml:"year"`
-	Pages int `xml:"pages"`
+	Year      int       `xml:"year"`
+	Pages     int       `xml:"pages"`
 }
 
 type NameAndUrl struct {
 	Name string `xml:"name"`
-	Url string `xml:"url"`
+	Url  string `xml:"url"`
 }
 
 type Publisher struct {
-	*NameAndUrl
+	NameAndUrl `bson:",inline"`
 }
 
 type Author struct {
-	Id int64 `xml:"-"`
-	*NameAndUrl
+	Id         int64 `xml:"-" json:"-" bson:"-"`
+	NameAndUrl `bson:",inline"`
 }
 
 func (b *Book) MyRatingPercent() int {
@@ -117,7 +120,7 @@ func (r *BookshelfWriterXml) set(bookshelf Bookshelf) {
 // ---
 
 type BookshelfReaderSql struct {
-	db *sql.DB
+	db     *sql.DB
 	userId string
 }
 
@@ -144,7 +147,6 @@ func (r *BookshelfReaderSql) get() Bookshelf {
 
 	for rows.Next() {
 		book := Book{}
-		book.Publish = Publish{Publisher: Publisher{NameAndUrl: &NameAndUrl{}}}
 		err = rows.Scan(&book.Id, &book.Name, &book.Url, &book.Cover, &book.Publish.Publisher.Name, &book.Publish.Publisher.Url, &book.Publish.Year, &book.Publish.Pages, &book.MyRating, &book.MyReview)
 		checkErr(err)
 
@@ -155,7 +157,7 @@ func (r *BookshelfReaderSql) get() Bookshelf {
 		checkErr(err)
 
 		for rowsAuthors.Next() {
-			author := Author{NameAndUrl: &NameAndUrl{}}
+			author := Author{}
 			err = rowsAuthors.Scan(&author.Id, &author.Name, &author.Url)
 			checkErr(err)
 			book.Authors = append(book.Authors, author)
@@ -171,15 +173,15 @@ type BookshelfWriterSql struct {
 	db *sql.DB
 }
 
-func (r *BookshelfWriterSql) set(bookshelf Bookshelf) {
+func (w *BookshelfWriterSql) set(bookshelf Bookshelf) {
 
-	stmt, err := r.db.Prepare("DELETE FROM users WHERE identifier = ?")
+	stmt, err := w.db.Prepare("DELETE FROM users WHERE identifier = ?")
 	checkErr(err)
 
 	_, err = stmt.Exec(bookshelf.User.Id)
 	checkErr(err)
 
-	stmt, err = r.db.Prepare("INSERT INTO users(identifier, name, email, title, intro) values(?,?,?,?,?)")
+	stmt, err = w.db.Prepare("INSERT INTO users(identifier, name, email, title, intro) values(?,?,?,?,?)")
 	checkErr(err)
 
 	_, err = stmt.Exec(bookshelf.User.Id, bookshelf.User.Name, bookshelf.User.Email, bookshelf.Title, bookshelf.Intro)
@@ -190,7 +192,7 @@ func (r *BookshelfWriterSql) set(bookshelf Bookshelf) {
 		for _, author := range book.Authors {
 			sid := author.Name + author.Url
 			if _, has := authorsUnique[sid]; !has {
-				stmt, err := r.db.Prepare("INSERT INTO authors(name, user, url) values(?,?,?)")
+				stmt, err := w.db.Prepare("INSERT INTO authors(name, user, url) values(?,?,?)")
 				checkErr(err)
 				result, err := stmt.Exec(author.Name, bookshelf.User.Id, author.Url)
 				checkErr(err)
@@ -203,7 +205,7 @@ func (r *BookshelfWriterSql) set(bookshelf Bookshelf) {
 	}
 
 	for _, book := range bookshelf.Books {
-		stmt, err := r.db.Prepare("INSERT INTO books(user, name, url, cover, publisher_name, publisher_url, year, pager, my_rating, my_review) values(?,?,?,?,?,?,?,?,?,?)")
+		stmt, err := w.db.Prepare("INSERT INTO books(user, name, url, cover, publisher_name, publisher_url, year, pager, my_rating, my_review) values(?,?,?,?,?,?,?,?,?,?)")
 		checkErr(err)
 
 		res, err := stmt.Exec(bookshelf.User.Id, book.Name, book.Url, book.Cover, book.Publish.Publisher.Name, book.Publish.Publisher.Url, book.Publish.Year, book.Publish.Pages, book.MyRating, book.MyReview)
@@ -213,30 +215,55 @@ func (r *BookshelfWriterSql) set(bookshelf Bookshelf) {
 		checkErr(err)
 
 		for _, author := range book.Authors {
-			stmt, err = r.db.Prepare("INSERT INTO books_authors(book_id, author_id) values(?,?)")
+			stmt, err = w.db.Prepare("INSERT INTO books_authors(book_id, author_id) values(?,?)")
 			checkErr(err)
 
-			_, err = stmt.Exec(bookId, authorsUnique[author.Name + author.Url].Id)
+			_, err = stmt.Exec(bookId, authorsUnique[author.Name+author.Url].Id)
 			checkErr(err)
 		}
 	}
 }
 
-func (r *BookshelfWriterSql) initDb() {
-	stmt, err := r.db.Prepare("CREATE TABLE users(identifier VARCHAR PRIMARY KEY ASC, name VARCHAR, email VARCHAR, title VARCHAR, intro VARCHAR);")
+func (w *BookshelfWriterSql) initDb() {
+	stmt, err := w.db.Prepare("CREATE TABLE users(identifier VARCHAR PRIMARY KEY ASC, name VARCHAR, email VARCHAR, title VARCHAR, intro VARCHAR);")
 	checkErr(err)
 
-	stmt, err = r.db.Prepare("CREATE TABLE books(id INTEGER PRIMARY KEY, user VARCHAR, name VARCHAR, url VARCHAR, cover VARCHAR, publisher_name VARCHAR, publisher_url VARCHAR, year INTEGER, pager INTEGER, my_rating INTEGER, my_review VARCHAR, FOREIGN KEY(user) REFERENCES users(identifier) ON DELETE CASCADE ON UPDATE CASCADE);")
+	stmt, err = w.db.Prepare("CREATE TABLE books(id INTEGER PRIMARY KEY, user VARCHAR, name VARCHAR, url VARCHAR, cover VARCHAR, publisher_name VARCHAR, publisher_url VARCHAR, year INTEGER, pager INTEGER, my_rating INTEGER, my_review VARCHAR, FOREIGN KEY(user) REFERENCES users(identifier) ON DELETE CASCADE ON UPDATE CASCADE);")
 	checkErr(err)
 
-	stmt, err = r.db.Prepare("CREATE TABLE authors(id INTEGER PRIMARY KEY, user VARCHAR, name VARCHAR, url VARCHAR, FOREIGN KEY(user) REFERENCES users(identifier) ON DELETE CASCADE ON UPDATE CASCADE);")
+	stmt, err = w.db.Prepare("CREATE TABLE authors(id INTEGER PRIMARY KEY, user VARCHAR, name VARCHAR, url VARCHAR, FOREIGN KEY(user) REFERENCES users(identifier) ON DELETE CASCADE ON UPDATE CASCADE);")
 	checkErr(err)
 
-	stmt, err = r.db.Prepare("CREATE TABLE books_authors(book_id INTEGER, author_id INTEGER,  PRIMARY KEY(book_id, author_id), FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE ON UPDATE CASCADE, FOREIGN KEY(author_id) REFERENCES authors(id) ON DELETE CASCADE ON UPDATE CASCADE);")
+	stmt, err = w.db.Prepare("CREATE TABLE books_authors(book_id INTEGER, author_id INTEGER,  PRIMARY KEY(book_id, author_id), FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE ON UPDATE CASCADE, FOREIGN KEY(author_id) REFERENCES authors(id) ON DELETE CASCADE ON UPDATE CASCADE);")
 	checkErr(err)
 
 	_, err = stmt.Exec()
 	checkErr(err)
+}
+
+// ---
+
+type BookshelfWriterMongo struct {
+	collection *mongo.Collection
+}
+
+func (r *BookshelfWriterMongo) set(bookshelf Bookshelf) {
+	_, err := r.collection.InsertOne(context.TODO(), bookshelf)
+	checkErr(err)
+}
+
+type BookshelfReaderMongo struct {
+	collection *mongo.Collection
+	userId     string
+}
+
+func (r *BookshelfReaderMongo) get() Bookshelf {
+	bookshelf := Bookshelf{}
+	filter := bson.NewDocument(bson.EC.String("user.id", r.userId))
+	err := r.collection.FindOne(context.Background(), filter).Decode(&bookshelf)
+	checkErr(err)
+
+	return bookshelf
 }
 
 // ---
