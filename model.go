@@ -1,11 +1,10 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/xml"
-	"github.com/mongodb/mongo-go-driver/bson"
-	"github.com/mongodb/mongo-go-driver/mongo"
+	"github.com/globalsign/mgo"
+	"github.com/globalsign/mgo/bson"
 	"os"
 	"path/filepath"
 )
@@ -244,24 +243,22 @@ func (w *BookshelfWriterSql) initDb() {
 // ---
 
 type BookshelfWriterMongo struct {
-	collection *mongo.Collection
+	collection *mgo.Collection
 }
 
 func (r *BookshelfWriterMongo) set(bookshelf Bookshelf) {
-	_, err := r.collection.InsertOne(context.TODO(), bookshelf)
+	err := r.collection.Insert(bookshelf)
 	checkErr(err)
 }
 
 type BookshelfReaderMongo struct {
-	collection *mongo.Collection
+	collection *mgo.Collection
 	userId     string
 }
 
 func (r *BookshelfReaderMongo) get() Bookshelf {
 	bookshelf := Bookshelf{}
-	filter := bson.NewDocument(bson.EC.String("user.id", r.userId))
-	err := r.collection.FindOne(context.Background(), filter).Decode(&bookshelf)
-	checkErr(err)
+	r.collection.Find(bson.M{"user.id": r.userId}).One(&bookshelf)
 
 	return bookshelf
 }

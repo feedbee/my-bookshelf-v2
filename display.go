@@ -1,10 +1,9 @@
 package main
 
 import (
-	"context"
 	"database/sql"
+	"github.com/globalsign/mgo"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/mongodb/mongo-go-driver/mongo"
 	"html/template"
 	"net/http"
 	"os"
@@ -85,16 +84,14 @@ func main() {
 		bw.set(bs)
 	})
 
-	http.HandleFunc("/save-to-mongo", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/xml-to-mongo", func(w http.ResponseWriter, r *http.Request) {
 		br := BookshelfReaderXml{
 			Filename: "public/data/feedbee.xml",
 		}
 
-		client, err := mongo.NewClient("mongodb://localhost:27017")
+		session, err := mgo.Dial("mongodb://localhost:27017")
 		checkErr(err)
-		err = client.Connect(context.TODO())
-		checkErr(err)
-		collection := client.Database("bookshelf").Collection("bookshelves")
+		collection := session.DB("bookshelf").C("bookshelves")
 		bw := BookshelfWriterMongo{
 			collection: collection,
 		}
@@ -104,11 +101,9 @@ func main() {
 	})
 
 	http.HandleFunc("/mongo-to-xml", func(w http.ResponseWriter, r *http.Request) {
-		client, err := mongo.NewClient("mongodb://localhost:27017")
+		session, err := mgo.Dial("mongodb://localhost:27017")
 		checkErr(err)
-		err = client.Connect(context.TODO())
-		checkErr(err)
-		collection := client.Database("bookshelf").Collection("bookshelves")
+		collection := session.DB("bookshelf").C("bookshelves")
 		br := BookshelfReaderMongo{
 			collection: collection,
 			userId:     "feedbee",

@@ -36,3 +36,11 @@
 [[constraint]]
   name = "github.com/mongodb/mongo-go-driver"
   version = "0.0.14"
+
+[[constraint]]
+  branch = "v2-unstable"
+  name = "github.com/go-mgo/mgo"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/globalsign/mgo"
